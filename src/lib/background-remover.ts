@@ -132,6 +132,49 @@ export async function getActiveBackend(): Promise<Backend | null> {
   }
 }
 
+/** True if the model is currently loaded in memory. */
+export function isModelLoaded(): boolean {
+  return loadPromise !== null;
+}
+
+/**
+ * Drop the in-memory model + processor so their memory can be reclaimed, and
+ * (best-effort) dispose the ONNX session. The next removeBackground reloads it.
+ */
+export async function unloadModel(): Promise<void> {
+  if (!loadPromise) return;
+  try {
+    const { model } = await loadPromise;
+    await (model as unknown as { dispose?: () => Promise<void> }).dispose?.();
+  } catch {
+    // ignore
+  }
+  loadPromise = null;
+}
+
+/**
+ * Delete the model weights the browser cached (Transformers.js stores them in
+ * the Cache Storage API). Frees ~100–200MB of disk; the next run re-downloads.
+ * Returns the number of cache entries removed.
+ */
+export async function clearModelCache(): Promise<number> {
+  await unloadModel();
+  if (typeof caches === "undefined") return 0;
+  let removed = 0;
+  try {
+    const keys = await caches.keys();
+    for (const key of keys) {
+      // Transformers.js uses a cache named "transformers-cache".
+      if (/transformers/i.test(key)) {
+        if (await caches.delete(key)) removed++;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return removed;
+}
+
 export type RemoveResult = {
   /** PNG blob with a transparent background. */
   blob: Blob;

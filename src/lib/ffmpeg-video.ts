@@ -38,20 +38,6 @@ export type FFmpegLoadOptions = {
   onLog?: (line: string) => void;
 };
 
-/** Read the JS heap size (Chrome only) in MB, for diagnostics. */
-export function jsHeapMB(): number {
-  const perf = performance as Performance & {
-    memory?: { usedJSHeapSize: number };
-  };
-  return perf.memory ? Math.round(perf.memory.usedJSHeapSize / 1048576) : -1;
-}
-
-/** Emit a diagnostic line to the console with heap sizes. */
-export function diag(label: string): void {
-  // eslint-disable-next-line no-console
-  console.log(`[bgvideo] ${label} — jsHeap=${jsHeapMB()}MB`);
-}
-
 // Cache the core blob URLs so reloads don't re-download the ~32MB wasm.
 let coreURL: string | null = null;
 let wasmURL: string | null = null;
@@ -108,6 +94,29 @@ export async function reloadFFmpeg(): Promise<FFmpeg> {
   ffmpeg = null;
   loadPromise = null;
   return getFFmpeg();
+}
+
+/**
+ * Fully unload FFmpeg: terminate the worker and drop the cached core blob URLs
+ * so the next use re-downloads a fresh core. Used by "Clear data".
+ */
+export async function unloadFFmpeg(): Promise<void> {
+  try {
+    ffmpeg?.terminate();
+  } catch {
+    // ignore
+  }
+  ffmpeg = null;
+  loadPromise = null;
+  if (coreURL) URL.revokeObjectURL(coreURL);
+  if (wasmURL) URL.revokeObjectURL(wasmURL);
+  coreURL = null;
+  wasmURL = null;
+}
+
+/** True if the FFmpeg core is currently loaded in memory. */
+export function isFFmpegLoaded(): boolean {
+  return !!ffmpeg?.loaded;
 }
 
 const IN = "input";
@@ -182,6 +191,32 @@ export async function extractFirstFrame(file: File | Blob): Promise<Blob> {
   return new Blob([toBytes(data)], { type: "image/png" });
 }
 
+/**
+ * Extract a single frame at a given timestamp (seconds) as a PNG Blob — used by
+ * the frame slider so the user can preview any frame, not just the first.
+ */
+export async function extractFrameAt(
+  file: File | Blob,
+  atSec: number,
+): Promise<Blob> {
+  const ff = await getFFmpeg();
+  await ff.writeFile(IN, await fetchFile(file));
+  // -ss before -i seeks fast; -frames:v 1 grabs a single frame there.
+  await ff.exec([
+    "-ss",
+    Math.max(0, atSec).toFixed(6),
+    "-i",
+    IN,
+    "-frames:v",
+    "1",
+    "at.png",
+  ]);
+  const data = await ff.readFile("at.png");
+  await ff.deleteFile("at.png").catch(() => {});
+  await ff.deleteFile(IN).catch(() => {});
+  return new Blob([toBytes(data)], { type: "image/png" });
+}
+
 /** Copy FileData into a Blob-safe buffer (plain ArrayBuffer backing). */
 function toBytes(data: unknown): Uint8Array<ArrayBuffer> {
   const u8 = data as Uint8Array;
@@ -228,18 +263,20 @@ export async function unmountInput(): Promise<void> {
 }
 
 /**
- * Extract the audio track once (if any) and return it as a JS Blob so it
- * survives FFmpeg reloads. Assumes the input is already mounted.
+ * Extract the audio track once (if any) as AAC/m4a and return it as a JS Blob
+ * so it survives FFmpeg reloads. m4a is used as the common source that the
+ * final WebM (→ Opus) and MP4 (→ AAC) mux steps each re-encode from. Assumes
+ * the input is already mounted.
  */
 export async function extractAudioBlob(info: VideoInfo): Promise<Blob | null> {
   if (!info.hasAudio) return null;
   const ff = await getFFmpeg();
   let ok = true;
   await ff
-    .exec(["-i", IN, "-vn", "-c:a", "libopus", AUDIO])
+    .exec(["-i", IN, "-vn", "-c:a", "aac", AUDIO])
     .catch(() => (ok = false));
   if (!ok || !(await fileExists(ff, AUDIO))) return null;
-  const blob = await readFile(ff, AUDIO, "audio/webm");
+  const blob = await readFile(ff, AUDIO, "audio/mp4");
   return blob;
 }
 
@@ -257,9 +294,9 @@ export async function extractBatchFrames(
   const ff = await getFFmpeg();
   await ensureCleanDir(ff, FRAME_DIR);
 
-  // Seek to the window and decode exactly its frames. -copyts keeps timing sane;
-  // -vsync 0 avoids dup/drop so we get exactly the source frames.
-  await ff.exec([
+  // Seek to the window and decode exactly its frames. -vsync 0 avoids dup/drop
+  // so we get exactly the source frames.
+  const ret = await ff.exec([
     "-ss",
     startSec.toFixed(6),
     "-t",
@@ -270,10 +307,21 @@ export async function extractBatchFrames(
     "0",
     `${FRAME_DIR}/f_%06d.png`,
   ]);
+  if (ret !== 0) {
+    throw new Error(`Frame extraction failed (ffmpeg exit ${ret})`);
+  }
 
   const entries = await ff.listDir(FRAME_DIR);
   const local = entries
-    .filter((e) => !e.isDir && e.name.startsWith("f_") && e.name.endsWith(".png"))
+    // Defensive: a crashed core can return malformed FS entries.
+    .filter(
+      (e) =>
+        e &&
+        !e.isDir &&
+        typeof e.name === "string" &&
+        e.name.startsWith("f_") &&
+        e.name.endsWith(".png"),
+    )
     .map((e) => e.name)
     .sort();
 
@@ -291,38 +339,56 @@ export async function takeFrame(ff: FFmpeg, path: string): Promise<Blob> {
 }
 
 /**
- * Encode the processed PNGs currently in OUT_DIR (named out_%06d.png, contiguous
- * from 1) into a segment WebM and return it as a JS Blob (so it survives an
- * FFmpeg reload). Clears OUT_DIR afterwards.
+ * Encode the alpha PNGs currently in OUT_DIR (out_%06d.png, from 1) into a
+ * transparent VP9-alpha WebM segment. Reads them IN PLACE — no JS round-trip —
+ * so it's a single exec on the current heap. Clears OUT_DIR afterwards.
  */
-export async function encodeSegmentBlob(
+export async function encodeWebMSegmentInPlace(
   info: VideoInfo,
   segmentIndex: number,
-  transparent: boolean,
 ): Promise<Blob> {
   const ff = await getFFmpeg();
   const seg = `seg_${String(segmentIndex).padStart(4, "0")}.webm`;
-  const pixFmt = transparent ? "yuva420p" : "yuv420p";
 
-  await ff.exec([
+  // Codec choice — measured on the ACTUAL @ffmpeg/core WASM binary
+  // (24 frames @ 1080p, driven directly in Node):
+  //   VP9 default effort:      550MB heap, 33.3s  — works but ~1.4s/frame
+  //   VP9 -cpu-used ≥ 5:       CRASHES ("memory access out of bounds" at only
+  //                            ~265MB — a bug in this build's VP9 fast path,
+  //                            NOT heap exhaustion. Do not use VP9 speed flags.)
+  //   VP8 realtime -cpu-used 8: 199MB heap, 2.7s  — 12× faster, no crash.
+  // VP8 is WebM's original alpha format (alpha_mode=1) and plays in the same
+  // browsers, so the transparent WebM is encoded with VP8.
+  const bitrateK = Math.max(
+    1500,
+    Math.min(20000, Math.round((info.width * info.height * info.fps * 0.12) / 1000)),
+  );
+  const ret = await ff.exec([
     "-framerate",
     info.fpsRational,
     "-i",
     `${OUT_DIR}/out_%06d.png`,
     "-c:v",
-    "libvpx-vp9",
+    "libvpx",
     "-pix_fmt",
-    pixFmt,
+    "yuva420p",
     "-auto-alt-ref",
     "0",
+    "-deadline",
+    "realtime",
+    "-cpu-used",
+    "8",
     "-crf",
-    "28",
+    "10",
     "-b:v",
-    "0",
+    `${bitrateK}k`,
     "-r",
     info.fpsRational,
     seg,
   ]);
+  if (ret !== 0) {
+    throw new Error(`WebM encode failed (ffmpeg exit ${ret})`);
+  }
 
   const blob = await readFile(ff, seg, "video/webm");
   await ff.deleteFile(seg).catch(() => {});
@@ -331,27 +397,83 @@ export async function encodeSegmentBlob(
 }
 
 /**
- * Concatenate the segment WebM Blobs (lossless -c copy) and mux the audio Blob
- * back in if present. Runs on a FRESH FFmpeg with an empty FS: the segment and
- * audio Blobs are written in from JS. Returns the final WebM blob.
+ * Encode the alpha PNGs currently in OUT_DIR into an OPAQUE H.264 MP4 segment,
+ * flattening the transparent areas over a solid color. Encoded straight from the
+ * PNGs (which carry correct alpha) — NOT from a WebM, whose alpha ffmpeg can't
+ * reliably re-decode. Single exec on the current heap; clears OUT_DIR afterwards.
  */
-export async function concatSegmentBlobs(
+export async function encodeMp4SegmentInPlace(
+  info: VideoInfo,
+  segmentIndex: number,
+  mp4Color: string,
+): Promise<Blob> {
+  const ff = await getFFmpeg();
+  const seg = `seg_${String(segmentIndex).padStart(4, "0")}.mp4`;
+  const color = ffColor(mp4Color);
+
+  const ret = await ff.exec([
+    "-framerate",
+    info.fpsRational,
+    "-i",
+    `${OUT_DIR}/out_%06d.png`,
+    "-filter_complex",
+    `color=c=${color}:s=${info.width}x${info.height}:r=${info.fpsRational}[bg];` +
+      `[bg][0:v]overlay=shortest=1,format=yuv420p[v]`,
+    "-map",
+    "[v]",
+    "-c:v",
+    "libx264",
+    // ultrafast: x264's default `medium` preset is slow in single-thread WASM;
+    // ultrafast is many× faster for a modest size increase.
+    "-preset",
+    "ultrafast",
+    "-crf",
+    "22",
+    "-r",
+    info.fpsRational,
+    seg,
+  ]);
+  if (ret !== 0) {
+    throw new Error(`MP4 encode failed (ffmpeg exit ${ret})`);
+  }
+
+  const blob = await readFile(ff, seg, "video/mp4");
+  await ff.deleteFile(seg).catch(() => {});
+  await ensureCleanDir(ff, OUT_DIR);
+  return blob;
+}
+
+/** Normalize a "#rrggbb" color to ffmpeg's "0xRRGGBB" form. */
+function ffColor(hex: string): string {
+  const h = hex.replace(/^#/, "");
+  return `0x${h.length === 3 ? h.split("").map((c) => c + c).join("") : h}`;
+}
+
+/**
+ * Concatenate a list of same-format segment Blobs losslessly (-c copy) and mux
+ * the audio Blob back in if present. Runs on a FRESH FFmpeg with an empty FS.
+ *
+ * @param ext        "webm" or "mp4"
+ * @param audioCodec ffmpeg audio encoder for the muxed track ("libopus"/"aac")
+ */
+async function concatFormat(
   segmentBlobs: Blob[],
+  ext: "webm" | "mp4",
   audioBlob: Blob | null,
+  audioCodec: string,
 ): Promise<Blob> {
   const ff = await getFFmpeg();
 
   const names: string[] = [];
   for (let i = 0; i < segmentBlobs.length; i++) {
-    const name = `seg_${String(i).padStart(4, "0")}.webm`;
+    const name = `s_${String(i).padStart(4, "0")}.${ext}`;
     await ff.writeFile(name, new Uint8Array(await segmentBlobs[i].arrayBuffer()));
     names.push(name);
   }
 
-  const list = names.map((s) => `file '${s}'`).join("\n");
-  await ff.writeFile("concat.txt", list);
+  await ff.writeFile("concat.txt", names.map((s) => `file '${s}'`).join("\n"));
 
-  const concatOut = "concat.webm";
+  const concatOut = `concat.${ext}`;
   await ff.exec([
     "-f",
     "concat",
@@ -366,17 +488,18 @@ export async function concatSegmentBlobs(
 
   let finalName = concatOut;
   if (audioBlob) {
-    await ff.writeFile(AUDIO, new Uint8Array(await audioBlob.arrayBuffer()));
-    finalName = "output.webm";
+    const audioIn = `audio_in.${ext === "webm" ? "webm" : "m4a"}`;
+    await ff.writeFile(audioIn, new Uint8Array(await audioBlob.arrayBuffer()));
+    finalName = `output.${ext}`;
     await ff.exec([
       "-i",
       concatOut,
       "-i",
-      AUDIO,
+      audioIn,
       "-c:v",
       "copy",
       "-c:a",
-      "libopus",
+      audioCodec,
       "-map",
       "0:v:0",
       "-map",
@@ -384,10 +507,35 @@ export async function concatSegmentBlobs(
       "-shortest",
       finalName,
     ]);
+    await ff.deleteFile(audioIn).catch(() => {});
   }
 
-  const blob = await readFile(ff, finalName, "video/webm");
+  const mime = ext === "webm" ? "video/webm" : "video/mp4";
+  const blob = await readFile(ff, finalName, mime);
+
+  // Clean up so a subsequent format concat starts clean.
+  for (const n of names) await ff.deleteFile(n).catch(() => {});
+  await ff.deleteFile("concat.txt").catch(() => {});
+  await ff.deleteFile(concatOut).catch(() => {});
+  if (finalName !== concatOut) await ff.deleteFile(finalName).catch(() => {});
+
   return blob;
+}
+
+/** Concatenate the transparent WebM segments (+ Opus audio). */
+export function concatWebM(
+  segmentBlobs: Blob[],
+  audioBlob: Blob | null,
+): Promise<Blob> {
+  return concatFormat(segmentBlobs, "webm", audioBlob, "libopus");
+}
+
+/** Concatenate the opaque MP4 segments (+ AAC audio). */
+export function concatMP4(
+  segmentBlobs: Blob[],
+  audioBlob: Blob | null,
+): Promise<Blob> {
+  return concatFormat(segmentBlobs, "mp4", audioBlob, "aac");
 }
 
 // --- FS helpers ----------------------------------------------------------

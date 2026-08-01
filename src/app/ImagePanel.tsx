@@ -139,14 +139,14 @@ export default function ImagePanel() {
               <a
                 href={job.resultUrl}
                 download={toPngName(job.originalName)}
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-zinc-900 px-5 text-sm font-medium text-white transition-colors duration-150 hover:bg-zinc-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
+                className="btn-primary"
               >
                 Download PNG
               </a>
               <button
                 type="button"
                 onClick={() => fileInput.current?.click()}
-                className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium transition-colors duration-150 hover:bg-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                className="btn-secondary"
               >
                 Try another image
               </button>

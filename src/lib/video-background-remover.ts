@@ -9,22 +9,29 @@
  * transparent (VP9 alpha) or filled with a solid color.
  */
 
-import { removeBackground, type LoadProgress } from "./background-remover";
+import {
+  removeBackground,
+  clearModelCache,
+  type LoadProgress,
+} from "./background-remover";
 import {
   getFFmpeg,
   reloadFFmpeg,
+  unloadFFmpeg,
   probeVideo,
   extractFirstFrame,
+  extractFrameAt,
   mountInput,
   unmountInput,
   extractAudioBlob,
   extractBatchFrames,
   takeFrame,
-  encodeSegmentBlob,
-  concatSegmentBlobs,
+  encodeWebMSegmentInPlace,
+  encodeMp4SegmentInPlace,
+  concatWebM,
+  concatMP4,
   prepareOutputDir,
   resetWorkspace,
-  diag,
   OUT_DIR_NAME,
   type VideoInfo,
 } from "./ffmpeg-video";
@@ -52,9 +59,13 @@ export type VideoProgress = {
   detail?: string;
 };
 
+export type VideoFormat = "webm" | "mp4";
+
 export type VideoResult = {
+  /** The single output in the chosen format. */
   blob: Blob;
   url: string;
+  format: VideoFormat;
   info: VideoInfo;
   frameCount: number;
 };
@@ -91,25 +102,36 @@ export async function compositeBackground(
   });
 }
 
-/**
- * Render a preview of the first frame with the background removed and the
- * chosen background applied. Returns an object URL (caller revokes it).
- */
-export async function previewFirstFrame(
+/** Probe the video for its dimensions, fps, duration, audio and frame count. */
+export async function getVideoInfo(
   file: File | Blob,
-  background: Background,
-  onModelProgress?: (p: LoadProgress) => void,
-): Promise<{ url: string; width: number; height: number }> {
+): Promise<VideoInfo & { frameCount: number }> {
   const ff = await getFFmpeg();
   await resetWorkspace(ff);
-
   const info = await probeVideo(file);
-  // Only decode the first frame — no need to explode the whole video to preview.
-  const firstPng = await extractFirstFrame(file);
-  const cut = await removeBackground(firstPng, { onProgress: onModelProgress });
-  const composed = await compositeBackground(cut.blob, background);
+  const frameCount = Math.max(1, Math.round(info.duration * info.fps));
+  return { ...info, frameCount };
+}
 
-  // Free the cut-out object URL from removeBackground; we only need `composed`.
+/**
+ * Render a preview of a specific frame (1-based) with its background removed and
+ * the chosen background applied. Returns an object URL (caller revokes it).
+ */
+export async function previewFrame(
+  file: File | Blob,
+  frameNumber: number,
+  background: Background,
+  info: VideoInfo,
+  onModelProgress?: (p: LoadProgress) => void,
+): Promise<{ url: string; width: number; height: number }> {
+  await getFFmpeg();
+  // Decode just the one requested frame (by timestamp).
+  const png =
+    frameNumber <= 1
+      ? await extractFirstFrame(file)
+      : await extractFrameAt(file, (frameNumber - 1) / info.fps);
+  const cut = await removeBackground(png, { onProgress: onModelProgress });
+  const composed = await compositeBackground(cut.blob, background);
   URL.revokeObjectURL(cut.url);
 
   return {
@@ -119,10 +141,16 @@ export async function previewFirstFrame(
   };
 }
 
-// How many frames to hold in FFmpeg memory per batch. Kept small so that
-// peak WASM memory stays well under the single-thread core's 2GB cap,
-// regardless of the video's length or resolution.
-const BATCH_FRAMES = 24;
+/**
+ * Frames per batch, scaled to resolution so the per-batch working set (PNGs in
+ * MEMFS + encoder buffers — measured ~200MB for VP8 and ~96MB for x264 at
+ * 1080p on the real WASM core) stays far below the 2GB heap cap:
+ * ~48 at ≤720p (fewer reloads → faster), ~24 at 1080p, ~8 at 4K (headroom).
+ */
+function batchFramesFor(info: VideoInfo): number {
+  const px = Math.max(1, info.width * info.height);
+  return Math.max(8, Math.min(48, Math.round(50_000_000 / px)));
+}
 
 /**
  * Full pipeline — processes the video in memory-bounded batches so it never
@@ -138,7 +166,28 @@ const BATCH_FRAMES = 24;
  */
 export async function removeVideoBackground(
   file: File | Blob,
-  background: Background,
+  /** Which single output to produce. */
+  format: VideoFormat,
+  /** The color used to fill the MP4 background (ignored for WebM). */
+  mp4Color: string,
+  options: {
+    onProgress?: (p: VideoProgress) => void;
+    onModelProgress?: (p: LoadProgress) => void;
+  } = {},
+): Promise<VideoResult> {
+  try {
+    return await removeVideoBackgroundImpl(file, format, mp4Color, options);
+  } catch (err) {
+    // Never leave a possibly-corrupted FFmpeg instance behind for the next run.
+    await reloadFFmpeg().catch(() => {});
+    throw err;
+  }
+}
+
+async function removeVideoBackgroundImpl(
+  file: File | Blob,
+  format: VideoFormat,
+  mp4Color: string,
   {
     onProgress,
     onModelProgress,
@@ -148,12 +197,12 @@ export async function removeVideoBackground(
   } = {},
 ): Promise<VideoResult> {
   const report = (p: VideoProgress) => onProgress?.(p);
-  const transparent = background.kind === "transparent";
 
-  // 1. Ensure FFmpeg is ready and the workspace is clean.
+  // 1. Start from a HARD-FRESH FFmpeg worker. The singleton can survive a
+  // crashed previous run in a corrupted "loaded" state (aborted WASM core
+  // returning garbage FS listings) — a reload guarantees a clean heap + FS.
   report({ stage: "loading-ffmpeg", ratio: 0 });
-  let ff = await getFFmpeg();
-  await resetWorkspace(ff);
+  let ff = await reloadFFmpeg();
 
   // 2. Probe (self-contained: writes + deletes its own input).
   report({ stage: "probing", ratio: 0 });
@@ -161,38 +210,34 @@ export async function removeVideoBackground(
   if (!info.width || !info.height) {
     throw new Error("Could not read the video's dimensions.");
   }
-
   const estFrames = Math.max(1, Math.round(info.duration * info.fps));
 
   // 3. Extract the audio ONCE, persisted to a JS Blob (survives FFmpeg reloads).
-  diag(`extracting audio (hasAudio=${info.hasAudio})`);
   let audioBlob: Blob | null = null;
   if (info.hasAudio) {
     await mountInput(file);
-    audioBlob = await step("extractAudio", () => extractAudioBlob(info));
+    audioBlob = await extractAudioBlob(info);
     await unmountInput();
     await reloadFFmpeg(); // fresh heap before the batch loop
     ff = await getFFmpeg();
   }
 
-  // 4. Process in time-windowed batches. CRUCIAL: FFmpeg.wasm grows its WASM
-  // heap on every exec() and never frees it, so after a handful of batches it
-  // hits the 2GB cap ("memory access out of bounds"). We therefore TERMINATE
-  // and RELOAD FFmpeg after each batch — the only reliable way to reclaim its
-  // memory — persisting each finished segment to a JS Blob first.
-  const batchDur = BATCH_FRAMES / info.fps;
+  // 4. Process in time-windowed batches. FFmpeg.wasm grows its WASM heap on
+  // every exec() and never frees it, so we TERMINATE and RELOAD FFmpeg after
+  // each batch to reclaim memory, persisting each finished segment to a JS Blob
+  // first. Exactly ONE encode per batch (the chosen format only) → one reload
+  // per batch → same speed as the original WebM-only pipeline.
+  const wantMp4 = format === "mp4";
+  const batchDur = batchFramesFor(info) / info.fps;
   const batchCount = Math.max(1, Math.ceil(info.duration / batchDur));
-  const segmentBlobs: Blob[] = [];
+  const segs: Blob[] = [];
   let processed = 0;
 
   report({ stage: "removing", ratio: 0, frameIndex: 0, frameCount: estFrames });
 
   for (let b = 0; b < batchCount; b++) {
     const startSec = b * batchDur;
-
-    // Each batch runs on a fresh FFmpeg heap. Mount the input (it lives in JS
-    // as `file`, so this is cheap and the heap starts near-empty each time).
-    await mountInput(file);
+    await mountInput(file); // fresh heap each batch → cheap re-mount
 
     report({
       stage: "extracting",
@@ -200,42 +245,29 @@ export async function removeVideoBackground(
       frameIndex: processed,
       frameCount: estFrames,
     });
-    diag(`batch ${b}/${batchCount} extract (ss=${startSec.toFixed(2)})`);
-    const frames = await step("extractBatchFrames", () =>
-      extractBatchFrames(info, startSec, batchDur, processed),
-    );
-    diag(`batch ${b} extracted ${frames.length} frames`);
+    const frames = await extractBatchFrames(info, startSec, batchDur, processed);
     if (frames.length === 0) {
       await reloadFFmpeg();
       ff = await getFFmpeg();
       continue;
     }
 
-    // Input no longer needed for this batch — free it before writing outputs.
     await unmountInput();
     await prepareOutputDir(ff);
 
     // Remove background from each frame, one at a time (bounded memory).
     for (let i = 0; i < frames.length; i++) {
-      const inputPng = await step("takeFrame", () =>
-        takeFrame(ff, frames[i].path),
-      );
-      const cut = await step("removeBackground", () =>
-        removeBackground(inputPng, { onProgress: onModelProgress }),
-      );
-      if (processed === 0) diag(`model backend = ${cut.backend}`);
-      const composed = await step("composite", () =>
-        compositeBackground(cut.blob, background),
-      );
+      const inputPng = await takeFrame(ff, frames[i].path);
+      const cut = await removeBackground(inputPng, {
+        onProgress: onModelProgress,
+      });
+      const alphaPng = new Uint8Array(await cut.blob.arrayBuffer());
       URL.revokeObjectURL(cut.url);
 
       const name = `${OUT_DIR_NAME}/out_${String(i + 1).padStart(6, "0")}.png`;
-      await step("writeFrame", async () =>
-        ff.writeFile(name, new Uint8Array(await composed.arrayBuffer())),
-      );
+      await ff.writeFile(name, alphaPng);
 
       processed += 1;
-      if (processed % 10 === 0) diag(`processed ${processed}/${estFrames}`);
       report({
         stage: "removing",
         ratio: Math.min(1, processed / estFrames),
@@ -244,56 +276,58 @@ export async function removeVideoBackground(
       });
     }
 
-    // Encode this batch into a segment Blob (persisted to JS)...
     report({
       stage: "encoding",
       ratio: (b + 1) / batchCount,
       frameIndex: processed,
       frameCount: estFrames,
     });
-    const seg = await step("encodeSegment", () =>
-      encodeSegmentBlob(info, b, transparent),
-    );
-    segmentBlobs.push(seg);
 
-    // ...then RELOAD FFmpeg to hand back all its WASM heap for the next batch.
-    diag(`batch ${b} done, reloading ffmpeg to free memory`);
+    // Encode ONLY the chosen format for this batch (single exec), directly from
+    // the alpha PNGs still in OUT_DIR — then reload once to free the heap.
+    segs.push(
+      wantMp4
+        ? await encodeMp4SegmentInPlace(info, b, mp4Color)
+        : await encodeWebMSegmentInPlace(info, b),
+    );
     await reloadFFmpeg();
     ff = await getFFmpeg();
   }
 
-  if (segmentBlobs.length === 0) {
+  if (segs.length === 0) {
     throw new Error("No frames could be extracted from the video.");
   }
 
-  // 5. Concatenate the segment Blobs (lossless) and mux audio, on a fresh heap.
-  diag(`concat ${segmentBlobs.length} segments (audio=${!!audioBlob})`);
+  // 5. Concatenate the segments (lossless) + mux audio, on a fresh heap.
   report({
     stage: "encoding",
     ratio: 1,
     frameIndex: processed,
     frameCount: processed,
   });
-  const blob = await step("concatSegments", () =>
-    concatSegmentBlobs(segmentBlobs, audioBlob),
-  );
+  const blob = wantMp4
+    ? await concatMP4(segs, audioBlob)
+    : await concatWebM(segs, audioBlob);
 
-  const url = URL.createObjectURL(blob);
   report({ stage: "done", ratio: 1 });
 
-  return { blob, url, info, frameCount: processed };
+  return {
+    blob,
+    url: URL.createObjectURL(blob),
+    format,
+    info,
+    frameCount: processed,
+  };
 }
 
-/** Wrap a pipeline step so a failure reports WHICH step failed and at what memory. */
-async function step<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    diag(`FAILED at step "${name}"`);
-    // eslint-disable-next-line no-console
-    console.error(`[bgvideo] step "${name}" threw:`, err);
-    throw new Error(
-      `${name} failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+export type ClearResult = { modelCacheEntries: number };
+
+/**
+ * Clear all locally-stored data: the cached AI model weights, the FFmpeg core,
+ * and any in-memory session. The next run re-downloads what it needs.
+ */
+export async function clearAllData(): Promise<ClearResult> {
+  const modelCacheEntries = await clearModelCache();
+  await unloadFFmpeg();
+  return { modelCacheEntries };
 }
