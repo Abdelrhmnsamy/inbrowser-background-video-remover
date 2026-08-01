@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { LoadProgress } from "@/lib/background-remover";
 import {
   removeVideoBackground,
@@ -205,7 +205,7 @@ export default function VideoPanel() {
             checkered={format === "webm"}
           >
             {previewLoading ? (
-              <div className="flex h-full min-h-56 w-full items-center justify-center text-sm text-zinc-400">
+              <div className="flex h-full min-h-56 w-full items-center justify-center text-sm text-neutral-400 dark:text-neutral-500">
                 Rendering frame…
               </div>
             ) : previewUrl ? (
@@ -219,7 +219,7 @@ export default function VideoPanel() {
                 }
               />
             ) : (
-              <div className="flex h-full min-h-56 items-center justify-center text-sm text-zinc-400">
+              <div className="flex h-full min-h-56 items-center justify-center text-sm text-neutral-400 dark:text-neutral-500">
                 —
               </div>
             )}
@@ -227,9 +227,9 @@ export default function VideoPanel() {
 
           {/* Frame scrubber */}
           <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-zinc-500">
+            <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               <span>Preview frame</span>
-              <span className="tabular-nums text-zinc-400">
+              <span className="tabular-nums text-neutral-400 dark:text-neutral-500">
                 {frame} / {info.frameCount}
               </span>
             </div>
@@ -244,15 +244,22 @@ export default function VideoPanel() {
               onKeyUp={onFrameCommit}
               aria-label="Preview frame"
               className="scrubber w-full"
+              style={
+                {
+                  "--fill": `${
+                    ((frame - 1) / Math.max(1, info.frameCount - 1)) * 100
+                  }%`,
+                } as CSSProperties
+              }
             />
           </div>
 
           {/* Output format */}
           <div className="flex flex-col gap-2">
-            <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+            <span className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
               Output format
             </span>
-            <div className="inline-flex w-fit gap-1 rounded-full bg-zinc-100 p-1 dark:bg-zinc-900">
+            <div className="inline-flex w-fit gap-1 rounded-full bg-neutral-100 p-1 dark:bg-neutral-700/60">
               {(
                 [
                   ["webm", "WebM", "transparent"],
@@ -267,8 +274,8 @@ export default function VideoPanel() {
                   className={[
                     "flex h-8 items-center gap-2 rounded-full px-4 text-sm font-medium transition-colors duration-150",
                     format === f
-                      ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
-                      : "text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+                      ? "bg-white text-neutral-900 shadow-sm dark:bg-neutral-600 dark:text-neutral-50"
+                      : "text-neutral-500 hover:text-neutral-800 dark:text-neutral-400 dark:hover:text-neutral-200",
                   ].join(" ")}
                 >
                   {label}
@@ -281,7 +288,7 @@ export default function VideoPanel() {
           {/* Background color — only meaningful for MP4 */}
           {format === "mp4" && (
             <div className="flex flex-col gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+              <span className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
                 Background color
               </span>
               <div className="flex flex-wrap items-center gap-2">
@@ -295,15 +302,15 @@ export default function VideoPanel() {
                     className={[
                       "h-8 w-8 rounded-full border transition-transform duration-150",
                       color.toLowerCase() === c.toLowerCase()
-                        ? "border-zinc-900 ring-2 ring-zinc-900/20 dark:border-white dark:ring-white/30"
+                        ? "border-neutral-900 ring-2 ring-neutral-900/20 dark:border-neutral-50 dark:ring-neutral-50/30"
                         : "border-black/10 hover:scale-105 dark:border-white/15",
                     ].join(" ")}
                     style={{ backgroundColor: c }}
                   />
                 ))}
-                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-full border border-zinc-300 px-3 text-sm dark:border-zinc-700">
+                <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-full border border-neutral-300 px-3 text-sm text-neutral-700 dark:border-neutral-500 dark:text-neutral-300">
                   <span
-                    className="h-4 w-4 rounded-full border border-black/10"
+                    className="h-4 w-4 rounded-full border border-black/10 dark:border-white/15"
                     style={{ backgroundColor: color }}
                   />
                   Custom
@@ -369,7 +376,7 @@ export default function VideoPanel() {
               Do another
             </button>
           </div>
-          <p className="text-xs text-zinc-400">
+          <p className="text-xs text-neutral-400 dark:text-neutral-500">
             {result.format === "webm"
               ? "WebM keeps real transparency (Chrome, Edge, Firefox)."
               : "MP4 plays everywhere, including Safari and iPhone."}

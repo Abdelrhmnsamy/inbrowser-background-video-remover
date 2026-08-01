@@ -127,7 +127,7 @@ export default function ImagePanel() {
                   className="max-h-80 w-full object-contain"
                 />
               ) : (
-                <div className="flex h-full min-h-52 items-center justify-center text-sm text-zinc-400">
+                <div className="flex h-full min-h-52 items-center justify-center text-sm text-neutral-400 dark:text-neutral-500">
                   {busy ? "Working…" : "—"}
                 </div>
               )}
@@ -151,7 +151,7 @@ export default function ImagePanel() {
                 Try another image
               </button>
               {job.backend && job.ms != null && (
-                <span className="text-xs text-zinc-500">
+                <span className="text-xs text-neutral-500 dark:text-neutral-400">
                   {job.backend === "webgpu" ? "WebGPU" : "CPU (WASM)"} ·{" "}
                   {(job.ms / 1000).toFixed(1)}s
                 </span>

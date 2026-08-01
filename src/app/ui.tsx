@@ -42,19 +42,21 @@ export function Dropzone({
       disabled={disabled}
       aria-label={title}
       className={[
-        "group relative flex min-h-44 w-full flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed p-8 text-center transition-colors duration-150",
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500",
+        "group relative flex min-h-52 w-full flex-col items-center justify-center gap-3 rounded-3xl border border-dashed p-10 text-center transition-[background-color,border-color] duration-150",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-900 dark:focus-visible:outline-neutral-50",
         dragOver
-          ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
-          : "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900",
+          ? "border-neutral-400 bg-neutral-100 dark:border-neutral-500 dark:bg-neutral-700"
+          : "border-neutral-300 bg-neutral-50 dark:border-neutral-600 dark:bg-neutral-700/50",
         disabled
           ? "cursor-not-allowed opacity-60"
-          : "cursor-pointer hover:border-zinc-400 dark:hover:border-zinc-600",
+          : "cursor-pointer hover:border-neutral-400 hover:bg-neutral-100 dark:hover:border-neutral-500 dark:hover:bg-neutral-700",
       ].join(" ")}
     >
-      <UploadIcon className="h-8 w-8 text-zinc-400" />
-      <span className="text-base font-medium">{title}</span>
-      <span className="text-sm text-zinc-500">{subtitle}</span>
+      <UploadIcon className="h-8 w-8 text-neutral-400 dark:text-neutral-400" />
+      <span className="sr-only">{title}</span>
+      <span className="text-sm text-neutral-500 dark:text-neutral-300">
+        {subtitle}
+      </span>
       <input
         ref={inputRef}
         type="file"
@@ -81,13 +83,13 @@ export function Panel({
 }) {
   return (
     <figure className="flex flex-col gap-2">
-      <figcaption className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+      <figcaption className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
         {label}
       </figcaption>
       <div
         className={[
-          "flex items-center justify-center overflow-hidden rounded-xl border border-zinc-200 p-3 dark:border-zinc-800",
-          checkered ? "checkerboard" : "bg-white dark:bg-zinc-900",
+          "flex items-center justify-center overflow-hidden rounded-2xl border border-neutral-200 p-3 dark:border-neutral-600",
+          checkered ? "checkerboard" : "bg-white dark:bg-neutral-700/40",
         ].join(" ")}
       >
         {children}
@@ -112,28 +114,32 @@ export function ProgressBar({
   const pct = Math.max(0, Math.min(100, Math.round(percent)));
   return (
     <div
-      className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
+      className="flex flex-col gap-2 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-600 dark:bg-neutral-700/40"
       role="status"
       aria-live="polite"
     >
-      <div className="flex items-center justify-between text-sm">
+      <div className="flex items-center justify-between text-sm text-neutral-900 dark:text-neutral-50">
         <span className="font-medium">{label}</span>
         {showPercent && (
-          <span className="tabular-nums text-zinc-500">{pct}%</span>
+          <span className="tabular-nums text-neutral-500 dark:text-neutral-400">
+            {pct}%
+          </span>
         )}
       </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-600">
         {indeterminate ? (
-          <div className="indeterminate h-full w-1/3 rounded-full bg-blue-500" />
+          <div className="indeterminate h-full w-1/3 rounded-full bg-neutral-900 dark:bg-neutral-100" />
         ) : (
           <div
-            className="h-full rounded-full bg-blue-500 transition-[width] duration-200 ease-out motion-reduce:transition-none"
+            className="h-full rounded-full bg-neutral-900 transition-[width] duration-200 ease-out motion-reduce:transition-none dark:bg-neutral-100"
             style={{ width: `${pct}%` }}
           />
         )}
       </div>
       {detail && (
-        <span className="truncate text-xs text-zinc-400">{detail}</span>
+        <span className="truncate text-xs text-neutral-400 dark:text-neutral-500">
+          {detail}
+        </span>
       )}
     </div>
   );
@@ -142,7 +148,7 @@ export function ProgressBar({
 export function ErrorBox({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
+      className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300"
       role="alert"
     >
       {children}

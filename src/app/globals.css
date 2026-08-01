@@ -5,18 +5,18 @@
   --foreground: #171717;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #262626;
+    --foreground: #fafafa;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
@@ -27,7 +27,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* ---- Buttons (premium, minimal: neutral ink + one restrained accent) ---- */
+/* ---- Buttons ---- */
 .btn-primary,
 .btn-secondary,
 .btn-ghost {
@@ -59,16 +59,16 @@ body {
 }
 
 .btn-primary {
-  background: #111113;
+  background: #171717;
   color: #fafafa;
 }
 .btn-primary:hover {
-  background: #2a2a2e;
+  background: #262626;
 }
 
 .btn-secondary {
   background: transparent;
-  color: var(--foreground);
+  color: #171717;
   border: 1px solid rgba(0, 0, 0, 0.14);
 }
 .btn-secondary:hover {
@@ -77,49 +77,73 @@ body {
 
 .btn-ghost {
   background: transparent;
-  color: #71717a;
+  color: #737373;
 }
 .btn-ghost:hover {
-  color: var(--foreground);
+  color: #171717;
 }
 
 @media (prefers-color-scheme: dark) {
   .btn-primary {
     background: #fafafa;
-    color: #111113;
+    color: #171717;
   }
   .btn-primary:hover {
-    background: #e4e4e7;
+    background: #e5e5e5;
   }
   .btn-secondary {
+    color: #fafafa;
     border-color: rgba(255, 255, 255, 0.16);
   }
   .btn-secondary:hover {
     background: rgba(255, 255, 255, 0.06);
   }
+  .btn-ghost {
+    color: #a3a3a3;
+  }
+  .btn-ghost:hover {
+    color: #fafafa;
+  }
 }
 
 /* ---- Frame scrubber (range input) ---- */
 .scrubber {
+  --track: 6px;
+  --thumb: 18px;
+  --fill-color: #171717;
+  --rest-color: rgba(0, 0, 0, 0.1);
   -webkit-appearance: none;
   appearance: none;
-  height: 6px;
-  border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.1);
+  width: 100%;
+  height: var(--thumb);
+  background: transparent;
   cursor: pointer;
 }
 @media (prefers-color-scheme: dark) {
   .scrubber {
-    background: rgba(255, 255, 255, 0.14);
+    --fill-color: #fafafa;
+    --rest-color: rgba(255, 255, 255, 0.14);
   }
+}
+.scrubber::-webkit-slider-runnable-track {
+  height: var(--track);
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--fill-color) 0%,
+    var(--fill-color) var(--fill, 0%),
+    var(--rest-color) var(--fill, 0%),
+    var(--rest-color) 100%
+  );
 }
 .scrubber::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 18px;
-  height: 18px;
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((var(--track) - var(--thumb)) / 2);
   border-radius: 9999px;
-  background: var(--foreground);
+  background: var(--fill-color);
   border: 2px solid var(--background);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   transition: transform 0.1s ease;
@@ -127,11 +151,22 @@ body {
 .scrubber::-webkit-slider-thumb:hover {
   transform: scale(1.12);
 }
-.scrubber::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
+.scrubber::-moz-range-track {
+  height: var(--track);
   border-radius: 9999px;
-  background: var(--foreground);
+  background: linear-gradient(
+    to right,
+    var(--fill-color) 0%,
+    var(--fill-color) var(--fill, 0%),
+    var(--rest-color) var(--fill, 0%),
+    var(--rest-color) 100%
+  );
+}
+.scrubber::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border-radius: 9999px;
+  background: var(--fill-color);
   border: 2px solid var(--background);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
@@ -159,12 +194,12 @@ body {
 
 @media (prefers-color-scheme: dark) {
   .checkerboard {
-    background-color: #18181b;
+    background-color: #262626;
     background-image:
-      linear-gradient(45deg, #27272a 25%, transparent 25%),
-      linear-gradient(-45deg, #27272a 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #27272a 75%),
-      linear-gradient(-45deg, transparent 75%, #27272a 75%);
+      linear-gradient(45deg, #404040 25%, transparent 25%),
+      linear-gradient(-45deg, #404040 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #404040 75%),
+      linear-gradient(-45deg, transparent 75%, #404040 75%);
   }
 }
 
