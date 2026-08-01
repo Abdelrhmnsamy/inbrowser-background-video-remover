@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Background Remover
 
-## Getting Started
+Remove the background from any image **entirely in your browser**. No upload, no
+server, no account — the image never leaves your device. Powered by
+[Transformers.js](https://github.com/huggingface/transformers.js) running the
+[RMBG-1.4](https://huggingface.co/briaai/RMBG-1.4) segmentation model through
+ONNX Runtime, with **WebGPU** acceleration when your browser supports it (and an
+automatic CPU/WASM fallback when it doesn't).
 
-First, run the development server:
+Open source under the MIT license — clone it, host it, fork it.
+
+## How it works
+
+1. You pick an image (drag-and-drop or file picker).
+2. On first use, the AI model (RMBG-1.4, ONNX) downloads once from the
+   Hugging Face CDN and is cached by your browser for next time.
+3. The model runs locally to predict a foreground mask.
+4. The mask becomes the alpha channel of the original image, and you download a
+   transparent PNG.
+
+Everything in steps 2–4 happens on your machine. There is no backend.
+
+## Getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The first background removal will take a bit longer while the model weights
+download (~a couple hundred MB, cached afterwards). With WebGPU, subsequent
+images process in a second or two on a modern Mac.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Requirements
 
-## Learn More
+- A browser with **WebGPU** for best performance (Chrome/Edge 113+, or Safari 26+
+  / Safari Technology Preview). Without WebGPU it still works on the CPU via
+  WebAssembly — just slower. The app shows a badge telling you which backend is
+  active.
 
-To learn more about Next.js, take a look at the following resources:
+## Build & deploy
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run build
+npm run start
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Because it's a fully static, client-side app, you can deploy it to any static
+host (Vercel, Netlify, GitHub Pages, Cloudflare Pages, etc.).
 
-## Deploy on Vercel
+## Tech
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- [Next.js 16](https://nextjs.org) (App Router) + React 19
+- [Transformers.js](https://github.com/huggingface/transformers.js) v4
+- [RMBG-1.4](https://huggingface.co/briaai/RMBG-1.4) (ONNX)
+- Tailwind CSS v4
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project layout
+
+- `src/lib/background-remover.ts` — the model loading + inference + compositing
+  logic (framework-agnostic; reusable in any browser project).
+- `src/app/page.tsx` — the UI (drag-drop, progress, before/after, download).
+
+## Notes
+
+`@huggingface/transformers` ships optional native Node dependencies (`sharp`,
+`onnxruntime-node`) used only in server/Node contexts. This app never runs the
+model on the server, so those are excluded from the server bundle via
+`serverExternalPackages` in `next.config.ts`. Any `npm audit` warnings you see
+originate from those unused Node-only dependencies, not the browser code path.
+
+## License
+
+[MIT](./LICENSE)
