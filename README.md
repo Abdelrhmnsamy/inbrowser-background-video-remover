@@ -66,6 +66,89 @@ Firefox.
 
 Everything happens on your machine. There is no backend.
 
+### How it works (architecture & performance)
+
+The video pipeline runs entirely in the browser, processing the clip in
+memory-bounded batches. FFmpeg's WASM heap is freed by terminating and
+reloading the worker once per batch, so memory stays flat regardless of clip
+length.
+
+```
+                    VIDEO BACKGROUND REMOVAL PIPELINE
+
+  ┌──────────┐
+  │  video   │  drop file
+  │  file    │
+  └────┬─────┘
+       │ probe (fps, size, duration, audio)          ← one-time, ~50ms
+       ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │              FOR EACH BATCH  (~48 frames @720p … ~8 @4K)             │
+  │                                                                       │
+  │   ① EXTRACT window → PNG frames        [FFmpeg WASM]   ~10ms/frame   │
+  │            │                                                          │
+  │            ▼                                                          │
+  │   ② ┌────────────────────────────────────────────┐                  │
+  │      │   FOR EACH FRAME:                          │                  │
+  │      │                                            │                  │
+  │      │   RMBG-1.4 inference  ███████████████████  │ ← THE COST       │
+  │      │      [WebGPU: ~300ms]  or  [CPU: 1–3s]     │   ~80–95% of     │
+  │      │            │                               │   total time     │
+  │      │            ▼                               │                  │
+  │      │   composite bg (canvas)  ▏  ~5ms           │                  │
+  │      │            ▼                               │                  │
+  │      │   write alpha PNG        ▏  ~2ms           │                  │
+  │      └────────────────────────────────────────────┘                 │
+  │            │                                                          │
+  │            ▼                                                          │
+  │   ③ ENCODE segment  ██                 [FFmpeg WASM]                  │
+  │        VP8 (WebM) ~73ms/frame  or  x264 (MP4) ~46ms/frame            │
+  │            │                                                          │
+  │            ▼                                                          │
+  │   ④ RELOAD FFmpeg  ▍   ~0.3–0.8s   (ONCE per batch, frees WASM heap) │
+  └─────────────────────────────────────────────────────────────────────┘
+       │
+       ▼
+  ⑤ CONCAT segments (-c copy, no re-encode)  +  mux audio    ~1s total
+       │
+       ▼
+  ┌──────────┐
+  │  WebM    │  or  MP4
+  └──────────┘
+```
+
+**Where the time goes** — for a typical 10s / 30fps / 1080p clip (300 frames):
+
+```
+   RMBG inference   ████████████████████████████████████████  ~85%  (WebGPU)
+   Encode (VP8/x264)███████                                    ~10%
+   Extract          ██                                          ~3%
+   Reloads          █                                           ~1%
+   Concat + audio   ▏                                           ~1%
+```
+
+On CPU (no WebGPU), inference balloons to ~95%+ and the whole run is 5–10×
+longer.
+
+**The one biggest factor is the AI model** — running RMBG-1.4 on every frame.
+Everything else (extract, encode, reloads) is tens of milliseconds per frame;
+the model is hundreds of ms (WebGPU) to seconds (CPU). So:
+
+- **Total time ≈ frame count × model-time-per-frame.** Frame count is
+  `duration × fps` — a 60fps clip takes ~2× a 30fps clip of the same length.
+- **WebGPU vs CPU** is the biggest per-frame multiplier (~5–10×). The badge in
+  the header shows which backend is active.
+- **Resolution barely affects the model** — RMBG resizes every frame to
+  1024×1024 internally regardless of input size, so a 4K frame costs the model
+  about the same as a 720p one. Resolution mainly affects the (minor)
+  extract/encode steps.
+
+Batch size scales with resolution (~48 frames at 720p down to ~8 at 4K) so the
+per-batch working set stays well under FFmpeg.wasm's 2GB heap cap. The WebM
+encoder uses **VP8** rather than VP9: on this FFmpeg build VP9 is ~12× slower
+and its fast-encode paths crash, while VP8 gives the same `alpha_mode=1`
+transparency at a fraction of the cost.
+
 ## Getting started
 
 ```bash
