@@ -52,3 +52,22 @@ body {
       linear-gradient(-45deg, transparent 75%, #27272a 75%);
   }
 }
+
+/* Indeterminate progress sweep — used while stage length is unknown. */
+.indeterminate {
+  animation: indeterminate-slide 1.2s ease-in-out infinite;
+}
+@keyframes indeterminate-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .indeterminate {
+    animation: none;
+    width: 100% !important;
+  }
+}

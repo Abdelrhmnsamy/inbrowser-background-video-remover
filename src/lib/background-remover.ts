@@ -96,8 +96,12 @@ async function loadModel(options: LoadOptions = {}): Promise<LoadedModel> {
     };
 
     const model = await AutoModel.from_pretrained(MODEL_ID, {
-      // fp16 on GPU is fast and accurate; fall back to fp32 on CPU/WASM.
-      dtype: webgpu ? "fp16" : "fp32",
+      // Memory-driven dtype choice (measured peak RSS at 1024² inference):
+      //   WebGPU  -> fp16  : runs in GPU memory (separate pool), fast + accurate.
+      //   WASM/CPU-> q8    : ~1.5GB peak, fits the browser's ~2GB WASM heap cap.
+      //                      (fp32 ~2.8GB and fp16 ~3.5GB both overflow it and
+      //                       crash with "memory access out of bounds".)
+      dtype: webgpu ? "fp16" : "q8",
       device: backend,
       progress_callback: progressCallback,
     });
@@ -160,9 +164,18 @@ export async function removeBackground(
 
   // Take the first batch item ([1, H, W]), scale 0–1 -> 0–255, and build a
   // single-channel mask resized back to the original resolution.
-  const maskImage = await RawImage.fromTensor(
-    output[0].mul(255).to("uint8"),
-  ).resize(image.width, image.height);
+  const scaled = output[0].mul(255).to("uint8");
+  const maskImage = await RawImage.fromTensor(scaled).resize(
+    image.width,
+    image.height,
+  );
+
+  // IMPORTANT: dispose the ONNX tensors. On the WebGPU/WASM backends these hold
+  // GPU/heap buffers that otherwise accumulate across frames and eventually
+  // overflow memory ("memory access out of bounds") when processing a video.
+  disposeTensor(pixel_values);
+  disposeTensor(output);
+  disposeTensor(scaled);
 
   // Composite: copy the original RGB and use the mask as the alpha channel.
   const blob = await compositeAlpha(image, maskImage);
@@ -175,6 +188,15 @@ export async function removeBackground(
     height: image.height,
     backend,
   };
+}
+
+/** Best-effort dispose of a Transformers.js tensor (frees GPU/WASM buffers). */
+function disposeTensor(t: unknown): void {
+  try {
+    (t as { dispose?: () => void })?.dispose?.();
+  } catch {
+    // ignore — disposal is best-effort
+  }
 }
 
 // --- helpers -------------------------------------------------------------
