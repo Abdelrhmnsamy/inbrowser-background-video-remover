@@ -1,5 +1,7 @@
 # Background Remover (Images & Video)
 
+A [halodesign.io](https://www.halodesign.io/) project.
+
 Remove the background from **images and videos entirely in your browser**. No
 upload, no server, no account — your files never leave your device. Powered by
 [Transformers.js](https://github.com/huggingface/transformers.js) running the
@@ -216,4 +218,4 @@ originate from those unused Node-only dependencies, not the browser code path.
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) © [halodesign.io](https://www.halodesign.io/)
