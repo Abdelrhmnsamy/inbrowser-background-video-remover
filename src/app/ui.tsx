@@ -1,6 +1,39 @@
 "use client";
 
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useEffect, useState, type RefObject } from "react";
+
+function fileFromClipboard(data: DataTransfer | null): File | null {
+  if (!data) return null;
+  const fromFiles = data.files?.[0];
+  if (fromFiles) return fromFiles;
+  for (const item of data.items ?? []) {
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  return null;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable
+  );
+}
+
+function matchesAccept(file: File, accept: string[]): boolean {
+  if (accept.length === 0) return true;
+  if (!file.type) return true;
+  return accept.some((a) => {
+    if (a.endsWith("/*")) return file.type.startsWith(a.slice(0, -1));
+    return file.type === a;
+  });
+}
 
 export function Dropzone({
   accept,
@@ -28,6 +61,18 @@ export function Dropzone({
     },
     [onFile],
   );
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (disabled || isEditableTarget(e.target)) return;
+      const file = fileFromClipboard(e.clipboardData);
+      if (!file || !matchesAccept(file, accept)) return;
+      e.preventDefault();
+      onFile(file);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [accept, disabled, onFile]);
 
   return (
     <button

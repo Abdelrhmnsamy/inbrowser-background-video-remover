@@ -188,8 +188,8 @@ export default function VideoPanel() {
           accept={ACCEPTED}
           inputRef={fileInput}
           onFile={handleFile}
-          title="Drop a video, or browse"
-          subtitle="MP4, MOV, WebM or MKV · processed locally, frame by frame"
+          title="Drop a video, paste, or browse"
+          subtitle="Drop, paste (⌘V), or browse — MP4, MOV, WebM, MKV"
         />
       )}
 

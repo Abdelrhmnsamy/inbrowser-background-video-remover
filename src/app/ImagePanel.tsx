@@ -88,8 +88,8 @@ export default function ImagePanel() {
         disabled={busy}
         inputRef={fileInput}
         onFile={handleFile}
-        title="Drop an image here, or browse"
-        subtitle="PNG, JPEG, WebP or GIF — processed locally"
+        title="Drop an image here, paste, or browse"
+        subtitle="Drop, paste (⌘V), or browse — PNG, JPEG, WebP, GIF"
       />
 
       {busy && (
