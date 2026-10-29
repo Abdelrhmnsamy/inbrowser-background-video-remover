@@ -1,0 +1,103 @@
+
+const express = require("express");
+const cors = require("cors");
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.use(cors({
+  origin: "https://snapdownblog.blogspot.com",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
+
+app.use(express.json({ limit: "10kb" }));
+
+app.get("/", (req, res) => {
+  res.json({
+    name: "SnapDown API",
+    status: "online",
+    version: "1.0.0"
+  });
+});
+
+app.post("/api/check", (req, res) => {
+  const input = req.body && req.body.url;
+
+  if (typeof input !== "string" || input.length > 2048) {
+    return res.status(400).json({
+      ok: false,
+      message: "أدخل رابطًا صالحًا."
+    });
+  }
+
+  let url;
+
+  try {
+    url = new URL(input);
+  } catch {
+    return res.status(400).json({
+      ok: false,
+      message: "الرابط غير صحيح."
+    });
+  }
+
+  if (
+    !["https:", "http:"].includes(url.protocol) ||
+    url.username ||
+    url.password
+  ) {
+    return res.status(400).json({
+      ok: false,
+      message: "نوع الرابط غير مسموح."
+    });
+  }
+
+  const host = url.hostname.toLowerCase();
+  const isYouTube =
+    host === "youtube.com" ||
+    host.endsWith(".youtube.com") ||
+    host === "youtu.be";
+
+  const isTikTok =
+    host === "tiktok.com" ||
+    host.endsWith(".tiktok.com");
+
+  if (isYouTube) {
+    return res.json({
+      ok: true,
+      platform: "youtube",
+      downloadable: false,
+      message:
+        "استخدم YouTube Studio أو Google Takeout لتنزيل فيديوهاتك. لا توفر هذه الخدمة تنزيلًا عامًا من روابط YouTube."
+    });
+  }
+
+  if (isTikTok) {
+    return res.json({
+      ok: true,
+      platform: "tiktok",
+      downloadable: false,
+      message:
+        "استخدم خيار حفظ الفيديو الرسمي إذا كان متاحًا، أو أدوات TikTok الرسمية للمحتوى والبيانات التي تملك صلاحية الوصول إليها."
+    });
+  }
+
+  const directFile =
+    /\.(mp4|webm|mov|m4v|mp3|wav|ogg|m4a|aac|flac)$/i
+      .test(url.pathname);
+
+  return res.json({
+    ok: true,
+    platform: "other",
+    directFile,
+    downloadable: false,
+    message: directFile
+      ? "يبدو أنه رابط ملف مباشر. يجب التحقق من صلاحية الوصول قبل تنزيله."
+      : "لم نتعرف على رابط ملف مباشر مدعوم."
+  });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`SnapDown API running on port ${PORT}`);
+});
